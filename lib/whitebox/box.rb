@@ -12,10 +12,10 @@ module Whitebox
       end
     end
 
-    def run(context = nil)
+    def run(opts = nil)
       @balance = @amount = @skip = 0
       @toggles = {}
-      @context = context
+      @opts = opts
 
       Order.clear
       @data.each_with_index do |datapoint, i|
@@ -27,6 +27,7 @@ module Whitebox
       orders.each do |order|
         @balance += order.datapoint[:close] * order.amount
         @amount += order.amount
+        @balance -= order.datapoint[:close] * order.amount.abs * 0.05 # spread
       end
 
       puts "Skip count: #{@skip}."
@@ -51,34 +52,34 @@ module Whitebox
     end
 
     def bruteforce
+      data = Securities::Stock.new(symbol: 'AAPL', start_date: '2013-01-01').output
       results = {}
-      force_range = 1..2
+      force_range = 1..20
       indicators = [:sma, :ema]
       puts "Bruteforce range: #{force_range}"
       force_range.each do |param_1|
         force_range.each do |param_2|
           puts "Doing #{param_1} and #{param_2}"
-          box = Whitebox::Box.new
-          box.run(param_1: param_1, param_2: param_2)
+          box = Whitebox::Box.new(data)
+          opts = {indicators: indicators, params: [param_1, param_2]}
+          box.run(opts)
           results[param_1] ||= {}
           results[param_1][param_2] = box.balance
         end
       end
 
-      print_me = {}
+      best = []
       results.each do |param_1, param_2_balance|
-        printable = param_2_balance.sort_by(&:last).reverse
-        puts "TOP COMBINATIONS #{param_1}"
-        print_me[param_1] ||= {}
-        binding.pry
-        print_me[param_1][param_2.first] = printable.take(2)
+        sorted_param_2_balance = param_2_balance.sort_by(&:last).reverse
+        sorted_param_2_balance.each do |param_2, balance|
+          best << {param_1: param_1, param_2: param_2, balance: balance}
+        end
       end
-      binding.pry
 
-      printable = results.sort_by(&:last).reverse
+      printable = best.sort_by { |k,v| k[:balance] }.reverse
       puts "TOP COMBINATIONS"
-      printable.take(5).each_with_index do |(param, balance), index|
-        puts "#{index}. P #{param} : #{balance}"
+      printable.take(10).each do |line|
+        puts "P1 #{line[:param_1]}, P2 #{line[:param_2]} : #{line[:balance]}"
       end
     end
 
@@ -86,8 +87,10 @@ module Whitebox
 
     def each_datapoint(datapoint)
 
-      if toggle { sma(@context[:param_1]) > sma(@context[:param_2]) }
+      if toggle { sma(@opts[:params][0]) > sma(@opts[:params][1]) }
         Order.make(datapoint, 1)
+      elsif toggle { sma(@opts[:params][0]) < sma(@opts[:params][1]) }
+        Order.make(datapoint, -1)
       end
 
     end
