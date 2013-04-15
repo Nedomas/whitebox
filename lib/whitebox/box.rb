@@ -1,14 +1,21 @@
 module Whitebox
-  class Box
-    attr_accessor :data, :toggle, :balance, :amount, :skip, :toggles
 
-    def initialize
-      @data = Securities::Stock.new(symbol: 'AAPL', start_date: '2012-01-01').output
+  class Box
+
+    attr_accessor :data, :balance, :amount, :skip, :toggles, :param
+
+    def initialize(*data)
+      @data = if data.first
+        data.first
+      else
+        Securities::Stock.new(symbol: 'AAPL', start_date: '2013-01-01').output
+      end
     end
 
-    def run
+    def run(context = nil)
       @balance = @amount = @skip = 0
       @toggles = {}
+      @context = context
 
       Order.clear
       @data.each_with_index do |datapoint, i|
@@ -27,38 +34,73 @@ module Whitebox
       puts "Balance: #{@balance.round(2)}"
     end
 
-    def each_datapoint(datapoint)
-
-      if toggle { sma(15, 20) > sma(20) }
-        Order.make(datapoint, 1)
-        puts "#{sma(15, 20)} now over #{sma(20)}"
-      elsif toggle { sma(100) < sma(200) }
-        binding.pry
-        Order.make(datapoint, -1)
-        puts "#{sma(100)} now under #{sma(200)}"
-      end
-
-    rescue Indicators::Helper::HelperException
-      @skip += 1
-    end
-
     def method_missing(m, *args)
       @indicator_data ||= {}
       datakey = "#{@current_data.first[:date]} #{@current_data.last[:date]}"
       @indicator_data[datakey] = Indicators::Data.new(@current_data) unless @indicator_data[datakey]
-
       @indicator_data[datakey].calc(type: m, params: args).output.last
     rescue => e
-      raise e
+
+      if e.to_s.match(/Data point length/)
+        @skip += 1
+        MissingData.new
+      else
+        raise e
+      end
+
+    end
+
+    def bruteforce
+      results = {}
+      force_range = 1..2
+      indicators = [:sma, :ema]
+      puts "Bruteforce range: #{force_range}"
+      force_range.each do |param_1|
+        force_range.each do |param_2|
+          puts "Doing #{param_1} and #{param_2}"
+          box = Whitebox::Box.new
+          box.run(param_1: param_1, param_2: param_2)
+          results[param_1] ||= {}
+          results[param_1][param_2] = box.balance
+        end
+      end
+
+      print_me = {}
+      results.each do |param_1, param_2_balance|
+        printable = param_2_balance.sort_by(&:last).reverse
+        puts "TOP COMBINATIONS #{param_1}"
+        print_me[param_1] ||= {}
+        binding.pry
+        print_me[param_1][param_2.first] = printable.take(2)
+      end
+      binding.pry
+
+      printable = results.sort_by(&:last).reverse
+      puts "TOP COMBINATIONS"
+      printable.take(5).each_with_index do |(param, balance), index|
+        puts "#{index}. P #{param} : #{balance}"
+      end
     end
 
     private
 
+    def each_datapoint(datapoint)
+
+      if toggle { sma(@context[:param_1]) > sma(@context[:param_2]) }
+        Order.make(datapoint, 1)
+      end
+
+    end
+
     def toggle(&rule)
-      @toggles[rule.source_location] ||= rule.yield
-      result = @toggles[rule.source_location] != rule.yield
-      @toggles[rule.source_location] = rule.yield
-      result
+      if rule.yield == :missing_data
+        false
+      else
+        @toggles[rule.source_location] ||= rule.yield
+        result = @toggles[rule.source_location] != rule.yield
+        @toggles[rule.source_location] = rule.yield
+        result
+      end
     end
 
   end
